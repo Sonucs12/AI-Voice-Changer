@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Voice Changer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 50px;
+        }
+
+        button {
+            width: 120px;
+            height: 40px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+        }
+
+        button:hover {
+            background-color: #3e8e41;
+        }
+
+        audio {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>AI Voice Changer</h1>
+    <button id="record-button">Record</button>
+    <button id="stop-button" style="display: none;">Stop</button>
+    <button id="play-button" style="display: none;">Play</button>
+    <audio id="changed-audio" controls style="display: none;"></audio>
+
+    <script>
+        const recordButton = document.getElementById('record-button');
+        const stopButton = document.getElementById('stop-button');
+        const playButton = document.getElementById('play-button');
+        const changedAudio = document.getElementById('changed-audio');
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let audioBuffer;
+        let audioContext;
+
+        recordButton.addEventListener('click', async () => {
+            // Initialize AudioContext
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            // Request microphone access
+            const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(mediaStream);
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = async () => {
+                const recordedAudio = new Blob(audioChunks, { type: 'audio/webm' });
+                const arrayBuffer = await recordedAudio.arrayBuffer();
+                audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+                // Apply pitch effect
+                const modifiedBuffer = await applyPitchEffect(audioBuffer);
+
+                // Convert processed audio buffer to a Blob for playback
+                const audioBlob = bufferToWavBlob(modifiedBuffer);
+                const audioUrl = URL.createObjectURL(audioBlob);
+                changedAudio.src = audioUrl;
+                changedAudio.style.display = 'block';
+
+                audioChunks = [];
+                playButton.style.display = 'block';
+            };
+
+            mediaRecorder.start();
+            stopButton.style.display = 'block';
+            recordButton.style.display = 'none';
+        });
+
+        stopButton.addEventListener('click', () => {
+            mediaRecorder.stop();
+            stopButton.style.display = 'none';
+            recordButton.style.display = 'block';
+        });
+
+        playButton.addEventListener('click', () => {
+            changedAudio.play();
+        });
+
+        async function applyPitchEffect(buffer) {
+            const offlineContext = new OfflineAudioContext(
+                buffer.numberOfChannels,
+                buffer.length,
+                buffer.sampleRate
+            );
+
+            const source = offlineContext.createBufferSource();
+            source.buffer = buffer;
+
+            const pitchShifter = offlineContext.createGain(); // Simple gain to simulate pitch shift
+            pitchShifter.gain.value = 1.5; // Adjust this value to change pitch
+
+            source.connect(pitchShifter);
+            pitchShifter.connect(offlineContext.destination);
+
+            source.start();
+            return await offlineContext.startRendering();
+        }
+
+        function bufferToWavBlob(buffer) {
+            const numChannels = buffer.numberOfChannels;
+            const length = buffer.length * numChannels * 2 + 44;
+            const arrayBuffer = new ArrayBuffer(length);
+            const view = new DataView(arrayBuffer);
+            const interleaved = interleaveChannels(buffer);
+
+            // RIFF header
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + interleaved.length * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, buffer.sampleRate, true);
+            view.setUint32(28, buffer.sampleRate * 4, true);
+            view.setUint16(32, numChannels * 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, interleaved.length * 2, true);
+
+            // Write PCM samples
+            let offset = 44;
+            for (let i = 0; i < interleaved.length; i++) {
+                view.setInt16(offset, interleaved[i] * 0x7FFF, true);
+                offset += 2;
+            }
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+        function interleaveChannels(buffer) {
+            const length = buffer.length * buffer.numberOfChannels;
+            const result = new Float32Array(length);
+            const input = [];
+
+            for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+                input.push(buffer.getChannelData(channel));
+            }
+
+            let index = 0;
+            for (let i = 0; i < buffer.length; i++) {
+                for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+                    result[index++] = input[channel][i];
+                }
+            }
+
+            return result;
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+    </script>
+</body>
+</html>
